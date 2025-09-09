@@ -3,6 +3,13 @@ const path = require('path');
 const app = express();
 const port = 3000;
 const fs = require('fs');
+const mysql = require('mysql');
+const dbconnection = mysql.createConnection({
+  host: 'localhost',
+  user: 'root',
+  password: '',
+  database: 'whackamole'
+});
 
 // Serve static files from the 'public' directory
 // The 'path.join' ensures the path works correctly across different operating systems
@@ -49,9 +56,108 @@ app.post('/logevent', express.json(), (req, res) => {
       }
     });
 
+    /*
+    -- 1) Games (one row per game)
+CREATE TABLE IF NOT EXISTS games (
+  game_id         VARCHAR(64) PRIMARY KEY,
+  started_at      DATETIME(3) NOT NULL,    -- store UTC
+  duration_ms     INT         NOT NULL,
+  grid_rows       SMALLINT    NOT NULL,
+  grid_cols       SMALLINT    NOT NULL,
+  mole_up_min_ms  INT         NOT NULL,
+  mole_up_max_ms  INT         NOT NULL,
+  idle_gap_min_ms INT         NOT NULL,
+  idle_gap_max_ms INT         NOT NULL,
+  ended_at        DATETIME(3) NULL,        -- convenience
+  final_score     INT         NULL
+) ENGINE=InnoDB;
 
+-- 2) Events (many rows per game)
+CREATE TABLE IF NOT EXISTS game_events (
+  event_id    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  game_id     VARCHAR(64) NOT NULL,
+  ts          DATETIME(3) NOT NULL,        -- UTC
+  t_rel_s     DECIMAL(8,3) NOT NULL,
+  type        ENUM('GAME_START','GAME_END','SHOW','HIDE','HIT','MISS') NOT NULL,
+  cell_row    SMALLINT NULL,
+  cell_col    SMALLINT NULL,
+  cell_index  SMALLINT NULL,
+  pos_rel_x   DECIMAL(5,3) NULL,           -- 0..1 when present
+  pos_rel_y   DECIMAL(5,3) NULL,
+  score       INT NULL,                    -- running score on HIT
+  final_score INT NULL,                    -- only on GAME_END
+  PRIMARY KEY (event_id),
+  CONSTRAINT fk_game_events_game
+    FOREIGN KEY (game_id) REFERENCES games(game_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB;
+ */
 
+    //insert the json into the database
+    if (parsed.gameId) {
+      const game = parsed;
+      const gameInsert = `
+        INSERT INTO games (game_id, started_at, duration_ms, grid_rows, grid_cols, mole_up_min_ms, mole_up_max_ms, idle_gap_min_ms, idle_gap_max_ms, ended_at, final_score)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE ended_at = VALUES(ended_at), final_score = VALUES(final_score)`;
+
+      game.startedAt = game.events.find(e => e.type === 'GAME_START')?.ts || new Date().toISOString();
+      game.endedAt = game.events.find(e => e.type === 'GAME_END')?.ts || new Date().toISOString();
+      game.final_score = game.events.find(e => e.type === 'GAME_END')?.final_score || 0;
+
+      const gameValues = [
+        game.gameId,
+        new Date(game.startedAt),
+        game.settings.duration_ms,
+        game.settings.grid?.rows,
+        game.settings.grid?.cols,
+        game.settings.mole_up_ms?.min,
+        game.settings.mole_up_ms?.max,
+        game.settings.idle_gap_ms?.min,
+        game.settings.idle_gap_ms?.max,
+        new Date(game.endedAt),
+        game.final_score
+      ];
+
+      dbconnection.query(gameInsert, gameValues, (err) => {
+        if (err) {
+          console.error('Error inserting game into database:', err);
+        } else {
+          console.log('Game inserted/updated in database:', game.gameId);
+        }
+      });
+
+      //insert events
+
+      const eventInsert = `
+        INSERT INTO game_events (game_id, ts, t_rel_s, type, cell_row, cell_col, cell_index, pos_rel_x, pos_rel_y, score, final_score)
+        VALUES ?`;
+      const eventValues = game.events.map(e => [
+        game.gameId,
+        new Date(e.ts),
+        e.t_rel_s,
+        e.type,
+        e.cell?.row || null,
+        e.cell?.col || null,
+        e.cell?.index || null,
+        e.pos_rel?.x || null,
+        e.pos_rel?.y || null,
+        e.score || null,
+        e.type === 'GAME_END' ? e.final_score : null
+      ]);        
+
+      dbconnection.query(eventInsert, [eventValues], (err) => {
+        if (err) {
+          console.error('Error inserting game events into database:', err);
+        } else {
+          console.log('Game events inserted into database:', game.gameId);
+        }
+      });
+    } else {
+      console.warn('No gameId found in parsed log, skipping database insert.');
+    }
   });
+
 });
 
 app.listen(port, () => {
@@ -203,29 +309,3 @@ function parseWhackAMoleLog(text) {
 
   return { gameId: gameId || null, settings, events };
 }
-
-/* ---------- Example usage ---------- */
-const rawLog = `2025-09-09T18:23:10.198Z | 0.000s | gameId=20250909-202300-172-6e68 | GAME_START | settings={grid=4x4,duration_ms=10000,mole_up_ms=[650,1200],idle_gap_ms=[220,500]}
-2025-09-09T18:23:10.198Z | 0.105s | gameId=20250909-202300-172-6e68 | SHOW  @ r4c1 (#12)
-2025-09-09T18:23:10.198Z | 0.510s | gameId=20250909-202300-172-6e68 | MISS  @ r1c2 (#1) | pos_rel=(0.541,0.594)
-2025-09-09T18:23:10.198Z | 0.951s | gameId=20250909-202300-172-6e68 | MISS  @ r2c2 (#5) | pos_rel=(0.524,0.432)
-2025-09-09T18:23:10.198Z | 1.270s | gameId=20250909-202300-172-6e68 | HIDE  @ r4c1 (#12)
-2025-09-09T18:23:10.198Z | 1.462s | gameId=20250909-202300-172-6e68 | MISS  @ r4c1 (#12) | pos_rel=(0.745,0.185)
-2025-09-09T18:23:10.198Z | 1.572s | gameId=20250909-202300-172-6e68 | SHOW  @ r2c1 (#4)
-2025-09-09T18:23:10.198Z | 2.213s | gameId=20250909-202300-172-6e68 | HIT   @ r2c1 (#4) | pos_rel=(0.694,0.653) | score=1
-2025-09-09T18:23:10.198Z | 2.787s | gameId=20250909-202300-172-6e68 | SHOW  @ r3c1 (#8)
-2025-09-09T18:23:10.198Z | 3.435s | gameId=20250909-202300-172-6e68 | HIT   @ r3c1 (#8) | pos_rel=(0.354,0.594) | score=2
-2025-09-09T18:23:10.198Z | 4.218s | gameId=20250909-202300-172-6e68 | SHOW  @ r3c4 (#11)
-2025-09-09T18:23:10.198Z | 4.777s | gameId=20250909-202300-172-6e68 | HIT   @ r3c4 (#11) | pos_rel=(0.753,0.449) | score=3
-2025-09-09T18:23:10.198Z | 5.354s | gameId=20250909-202300-172-6e68 | SHOW  @ r1c3 (#2)
-2025-09-09T18:23:10.198Z | 5.938s | gameId=20250909-202300-172-6e68 | HIT   @ r1c3 (#2) | pos_rel=(0.345,0.789) | score=4
-2025-09-09T18:23:10.198Z | 6.618s | gameId=20250909-202300-172-6e68 | SHOW  @ r4c4 (#15)
-2025-09-09T18:23:10.198Z | 7.290s | gameId=20250909-202300-172-6e68 | HIT   @ r4c4 (#15) | pos_rel=(0.396,0.457) | score=5
-2025-09-09T18:23:10.198Z | 7.946s | gameId=20250909-202300-172-6e68 | SHOW  @ r2c3 (#6)
-2025-09-09T18:23:10.198Z | 8.459s | gameId=20250909-202300-172-6e68 | HIT   @ r2c3 (#6) | pos_rel=(0.813,0.406) | score=6
-2025-09-09T18:23:10.198Z | 9.238s | gameId=20250909-202300-172-6e68 | SHOW  @ r1c2 (#1)
-2025-09-09T18:23:10.198Z | 9.765s | gameId=20250909-202300-172-6e68 | HIT   @ r1c2 (#1) | pos_rel=(0.405,0.730) | score=7
-2025-09-09T18:23:10.198Z | 10.005s | gameId=20250909-202300-172-6e68 | GAME_END | final_score=7`;
-
-const parsed = parseWhackAMoleLog(rawLog);
-console.log(JSON.stringify(parsed, null, 2));

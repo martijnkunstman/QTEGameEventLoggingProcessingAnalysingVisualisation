@@ -4,6 +4,7 @@ Example of a JS quick-time-events game running in NodeJS where events are logged
 npm start
 http://localhost:3000/
 
+run local mysql database and use database.sql to create a local database
 
 
 
