@@ -1,6 +1,6 @@
 // --- Config ---
   const GRID_SIZE = 4;                 // 4x4
-  const GAME_DURATION_MS = 30_000;     // 30 seconds
+  const GAME_DURATION_MS = 10_000;     // 30 seconds
   const MOLE_UP_MIN_MS = 650;          // realistic duration range
   const MOLE_UP_MAX_MS = 1200;
   const IDLE_GAP_MIN_MS = 220;         // small gap between moles
@@ -142,6 +142,12 @@
     logEl.scrollTop = logEl.scrollHeight;
 
     startBtn.disabled = false;
+    // Send log to server using post request
+    fetch('/logevent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ log: logLines })
+    });   
   }
 
   function startTimer() {
